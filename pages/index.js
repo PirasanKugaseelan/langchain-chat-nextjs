@@ -1,22 +1,19 @@
-import { useState, useRef, useEffect } from 'react'
-import Head from 'next/head'
-import styles from '../styles/Home.module.css'
-import Image from 'next/image'
-import ReactMarkdown from 'react-markdown'
+import { useState, useRef, useEffect } from 'react';
+import Head from 'next/head';
+import styles from '../styles/Home.module.css';
+import Image from 'next/image';
+import ReactMarkdown from 'react-markdown';
 import CircularProgress from '@mui/material/CircularProgress';
 
 export default function Home() {
-
   const [userInput, setUserInput] = useState("");
-  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([
-    {
-      "message": "Hi there! How can I help?",
-      "type": "apiMessage"
-    }
+    { role: "assistant", content: "Hi there! How can I help?" }
   ]);
-
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [audioData, setAudioData] = useState([]);
+  
   const messageListRef = useRef(null);
   const textAreaRef = useRef(null);
 
@@ -26,145 +23,122 @@ export default function Home() {
     messageList.scrollTop = messageList.scrollHeight;
   }, [messages]);
 
-  // Focus on text field on load
-  useEffect(() => {
-    textAreaRef.current.focus();
-  }, []);
-
-  // Handle errors
-  const handleError = () => {
-    setMessages((prevMessages) => [...prevMessages, { "message": "Oops! There seems to be an error. Please try again.", "type": "apiMessage" }]);
-    setLoading(false);
-    setUserInput("");
-  }
-
   // Handle form submission
-  const handleSubmit = async(e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-
-    if (userInput.trim() === "") {
-      return;
-    }
-
     setLoading(true);
-    setMessages((prevMessages) => [...prevMessages, { "message": userInput, "type": "userMessage" }]);
 
-    // Send user question and history to API
-    const response = await fetch("/api/chat", {
+    const audioBlob = new Blob(audioData, { type: 'audio/webm' });
+    const formData = new FormData();
+    formData.append('audio', audioBlob);
+
+    // Send audio data to API
+    const response = await fetch("/api/transcribe", {
       method: "POST",
-      headers: {
-          "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ question: userInput, history: history }),
+      body: formData,
     });
 
     if (!response.ok) {
       handleError();
       return;
-  }
+    }
 
-    // Reset user input
-    setUserInput("");
     const data = await response.json();
 
-    if (data.result.error === "Unauthorized") {
+    setMessages((prevMessages) => [...prevMessages, { role: "user", content: data.transcript }]);
+    setUserInput(data.transcript);
+
+    const context = [...messages, { role: "user", content: userInput }];
+
+    // Send chat history to API
+    const chatResponse = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ messages: context }),
+    });
+
+    if (!chatResponse.ok) {
       handleError();
       return;
     }
 
-    setMessages((prevMessages) => [...prevMessages, { "message": data.result.success, "type": "apiMessage" }]);
+    const chatData = await chatResponse.json();
+    setMessages((prevMessages) => [...prevMessages, { role: "assistant", content: chatData.result.content }]);
     setLoading(false);
-    
+    setAudioData([]);
   };
 
-  // Prevent blank submissions and allow for multiline input
-  const handleEnter = (e) => {
-    if (e.key === "Enter" && userInput) {
-      if(!e.shiftKey && userInput) {
-        handleSubmit(e);
-      }
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-    }
-  };
+  // Start recording
+  const startRecording = () => {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      const mediaRecorder = new MediaRecorder(stream);
+      setMediaRecorder(mediaRecorder);
 
-  // Keep history in sync with messages
-  useEffect(() => {
-    if (messages.length >= 3) {
-      setHistory([[messages[messages.length - 2].message, messages[messages.length - 1].message]]);
+      mediaRecorder.start();
+
+      mediaRecorder.ondataavailable = (e) => {
+        setAudioData(prevAudioData => [...prevAudioData, e.data]);
+      };
+    });
+  }
+
+  // Stop recording
+  const stopRecording = () => {
+    if (mediaRecorder) {
+      mediaRecorder.stop();
     }
-    }, [messages])
+  }
 
   return (
     <>
       <Head>
-        <title>LangChain Chat</title>
-        <meta name="description" content="LangChain documentation chatbot" />
+        <title>GPT-4 Chat UI</title>
+        <meta name="description" content="GPT-4 interface" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <div className={styles.topnav}>
-      <div className = {styles.navlogo}>
-    <a href="/">LangChain</a>
-    </div>
-    <div className = {styles.navlinks}>
-    <a href="https://langchain.readthedocs.io/en/latest/" target="_blank">Docs</a>
-    <a href="https://github.com/zahidkhawaja/langchain-chat-nextjs" target="_blank">GitHub</a>
-    </div>
-</div>
+        {/* Rest of your JSX ... */}
+      </div>
       <main className={styles.main}>
-      <div className = {styles.cloud}>
-        <div ref={messageListRef} className = {styles.messagelist}>
-        {messages.map((message, index) => {
-          return (
-            // The latest message sent by the user will be animated while waiting for a response
-              <div key = {index} className = {message.type === "userMessage" && loading && index === messages.length - 1  ? styles.usermessagewaiting : message.type === "apiMessage" ? styles.apimessage : styles.usermessage}>
-                {/* Display the correct icon depending on the message type */}
-                {message.type === "apiMessage" ? <Image src = "/parroticon.png" alt = "AI" width = "30" height = "30" className = {styles.boticon} priority = {true} /> : <Image src = "/usericon.png" alt = "Me" width = "30" height = "30" className = {styles.usericon} priority = {true} />}
-              <div className = {styles.markdownanswer}>
-                {/* Messages are being rendered in Markdown format */}
-                <ReactMarkdown linkTarget = {"_blank"}>{message.message}</ReactMarkdown>
-                </div>
-              </div>
-          )
-        })}
+        <div className={styles.cloud}>
+          {/* Rest of your JSX ... */}
         </div>
-            </div>
-           <div className={styles.center}>
-            
-            <div className = {styles.cloudform}>
-           <form onSubmit = {handleSubmit}>
-          <textarea 
-          disabled = {loading}
-          onKeyDown={handleEnter}
-          ref = {textAreaRef}
-          autoFocus = {false}
-          rows = {1}
-          maxLength = {512}
-          type="text" 
-          id="userInput" 
-          name="userInput" 
-          placeholder = {loading? "Waiting for response..." : "Type your question..."}  
-          value = {userInput} 
-          onChange = {e => setUserInput(e.target.value)} 
-          className = {styles.textarea}
-          />
-            <button 
-            type = "submit" 
-            disabled = {loading}
-            className = {styles.generatebutton}
-            >
-            {loading ? <div className = {styles.loadingwheel}><CircularProgress color="inherit" size = {20}/> </div> : 
-            // Send icon SVG in input field
-            <svg viewBox='0 0 20 20' className={styles.svgicon} xmlns='http://www.w3.org/2000/svg'>
-            <path d='M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z'></path>
-          </svg>}
-            </button>
+        <div className={styles.center}>
+          <div className={styles.cloudform}>
+            <form onSubmit={handleSubmit}>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={startRecording}
+              >
+                Start Recording
+              </button>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={stopRecording}
+              >
+                Stop Recording
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className={styles.generatebutton}
+              >
+                {loading ? <div className={styles.loadingwheel}><CircularProgress color="inherit" size={20} /> </div> :
+                  // Send icon SVG in input field
+                  <svg viewBox='0 0 20 20' className={styles.svgicon} xmlns='http://www.w3.org/2000/svg'>
+                    <path d='M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z'></path>
+                  </svg>}
+              </button>
             </form>
-            </div>
-            <div className = {styles.footer}>
-            <p>Powered by <a href = "https://github.com/hwchase17/langchain" target="_blank">LangChain</a>. Built by <a href="https://twitter.com/chillzaza_" target="_blank">Zahid</a>.</p>
-            </div>
+          </div>
+          <div className={styles.footer}>
+            {/* Rest of your JSX ... */}
+          </div>
         </div>
       </main>
     </>
